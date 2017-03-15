@@ -1,0 +1,38 @@
+<?jelly escape-by-default='true'?>
+<j:jelly xmlns:j="jelly:core" xmlns:st="jelly:stapler" xmlns:d="jelly:define" xmlns:l="/lib/layout" xmlns:t="/lib/hudson"  xmlns:c="/lib/credentials" xmlns:f="/lib/form">
+  <!--
+    Creates a text field that shows the value of the "name" property.
+    When submitted, it will be passed to the corresponding constructor parameter.
+  -->
+  <f:section title="${%Bitbucket Server Info}">
+    <f:entry title="${%Bitbucket Server}" help="/plugin/ssh/help-serverAliveInterval.html">
+      <f:textbox name="serverUrl" value="${instance.getServerUrl()}"
+                 checkUrl="'descriptorByName/BitbucketPublisher/checkServerUrl' + qs(this).nearBy('credentialsId').nearBy('serverUrl').toString()"
+        />
+    </f:entry>
+    <f:entry title="${%Credentials}" field="credentialsId">
+      <c:select
+      />
+    </f:entry>
+      <f:validateButton
+              title="${%Test Connection}" progress="${%Testing...}"
+              method="testConnection" with="serverUrl,credentialsId" />
+  </f:section>
+  <f:section title="${%Bitbucket Project Info}">
+    <f:entry title="${%Project Key}" help="/plugin/publish-to-bitbucket/help-ProjectKey.html">
+      <f:textbox name="projectKey" value="${instance.getProjectKey()}"
+                 checkUrl="'descriptorByName/BitbucketPublisher/checkProjectKey' + qs(this).nearBy('projectKey').toString()"
+
+      />
+    </f:entry>
+    <f:block>
+      <table>
+          <f:optionalBlock name="createProject" title="Create Project" checked="${instance.isCreateProjectEnabled()}">
+              <f:entry title="Project Name">
+                  <f:textbox name="projectName" value="${instance.getProjectName()}"/>
+              </f:entry>
+          </f:optionalBlock>
+      </table>
+    </f:block>
+  </f:section>
+</j:jelly>
