@@ -26,6 +26,7 @@ import hudson.tasks.BuildStepDescriptor;
 import hudson.tasks.Builder;
 import hudson.util.FormValidation;
 import hudson.util.ListBoxModel;
+import jenkins.model.Jenkins;
 import jenkins.tasks.SimpleBuildStep;
 import net.sf.json.JSONArray;
 import net.sf.json.JSONObject;
@@ -270,10 +271,11 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
         String hookObj = null;
         Unirest.setHttpClient(Utils.getClient());
         HttpRequestWithBody request = null;
+        Jenkins instance = Jenkins.getActiveInstance();
         try {
             switch (command){
                 case ADD_HOOK: {
-                    hookObj = "{\"exe\":\"create-jenkins-jobs.sh\",\"safe_path\":true,\"params\":\""+credentials.getUsername()+"\\\\r\\\\n"+credentials.getPassword().getPlainText()+"\"}";
+                    hookObj = "{\"exe\":\"create-jenkins-jobs.sh\",\"safe_path\":true,\"params\":\""+credentials.getUsername()+"\\\\r\\\\n"+credentials.getPassword().getPlainText()+"\\\\r\\\\n"+instance.getRootUrl()+"\"}";
                     setupHook(Unirest.put(hookUrl),hookObj,listener);
                     break;
                 }
@@ -304,6 +306,7 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
                 git.using(gitTool.getGitExe());
             }
             GitClient client = git.getClient();
+
             client.addDefaultCredentials(this.credentials);
             //client.checkout().branch("master").execute();
             client.setRemoteUrl("origin", this.repositoryUrl);
