@@ -58,8 +58,11 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
 
     private  String serverUrl;
     private  String projectName;
+    private  String ciServer;
     private  String credentialsId;
     private BProject createProject;
+    private CIServer createJenkinsJobs;
+
     private String projectKey;
     private String repositoryUrl;
     private String repoName;
@@ -89,11 +92,14 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
     // Fields in config.jelly must match the parameter names in the "DataBoundConstructor"
     @DataBoundConstructor
     public BitbucketPublisher(String serverUrl, String credentialsId, String projectKey,
-                              BProject createProject) {
+                              BProject createProject,CIServer createJenkinsJobs ) {
         this.serverUrl = serverUrl;
         this.createProject = createProject;
         if (createProject != null) {
             this.projectName = createProject.projectName;
+        }
+        if (createJenkinsJobs != null) {
+            this.ciServer = createJenkinsJobs.ciServer;
         }
         this.credentialsId = credentialsId;
         this.projectKey = projectKey;
@@ -124,26 +130,47 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
         this.projectKey = projectKey;
     }
 
+    @DataBoundSetter
+    public void setCreateJenkinsJobs(CIServer createJenkinsJobs) {
+        this.createJenkinsJobs = createJenkinsJobs;
+    }
+
 
     public String getServerUrl() {
         return serverUrl;
     }
+
     public String getProjectName() {
         return projectName;
     }
+
     public String getCredentialsId() {
         return credentialsId;
     }
+
     public BProject getCreateProject() {
         return createProject;
     }
+
     public String getProjectKey() {
         return projectKey;
     }
 
+    public String getCiServer() {
+        return ciServer;
+    }
+
+    public CIServer getCreateJenkinsJobs() {
+        return createJenkinsJobs;
+    }
+
+
 
     public String isCreateProjectEnabled(){
         return Strings.isNullOrEmpty(this.projectName)? "false":"true";
+    }
+    public String isCreateJenkinsJobs(){
+        return Strings.isNullOrEmpty(this.ciServer)? "false":"true";
     }
 
     @Override
@@ -151,6 +178,7 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
         try {
             String pKey = Utils.getExpandedVariable(this.projectKey,build,listener);
             String pName = Utils.getExpandedVariable(this.projectName,build,listener);
+            String jenkinsServer = Utils.getExpandedVariable(this.ciServer,build,listener);
 
             Job<?, ?> job = build.getParent();
             if (job instanceof AbstractProject) {
@@ -163,23 +191,32 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
             this.credentials=CredentialsProvider.findCredentialById(credentialsId, StandardUsernamePasswordCredentials.class, build);
             this.repoName = getRepoName(workspace,listener);
             if (repoName != null) {
-                if (setupBitbucketProjectAndRepository(pKey,pName,listener)){
+                if (setupBitbucketProjectAndRepository(pKey,pName,jenkinsServer,listener)){
                     if (pushToGit(listener,workspace)){
-                        processHook(REMOVE_HOOK,pKey,listener);
+                        //wait 10 second for the push to complete before removing hook
+                        Thread.sleep(10000);
+                        processHook(REMOVE_HOOK,pKey,jenkinsServer,listener);
                     };
+                }else{
+                    throw new RuntimeException(Messages.BitbucketPublisher_projectNotCreated());
+
                 }
+            }else{
+                throw new RuntimeException(Messages.BitbucketPublisher_pomNotFound());
+
             }
         } catch (XmlPullParserException | IOException | InterruptedException e) {
-            e.printStackTrace();
+            throw new RuntimeException(Messages.BitbucketPublisher_generalError());
+
         }
 
     }
-    private boolean setupBitbucketProjectAndRepository(String pKey,String pName,TaskListener listener){
+    private boolean setupBitbucketProjectAndRepository(String pKey,String pName,String jenkinsServer, TaskListener listener){
         boolean createProject;
         createProject = Strings.isNullOrEmpty(pName) ? false : true;
         boolean createRepo = !createProject || createProject(pKey,pName,listener);
         boolean addHook = createRepo && createRepo(pKey,repoName, listener);
-        return addHook && processHook(ADD_HOOK,pKey,listener);
+        return addHook && processHook(ADD_HOOK,pKey,jenkinsServer,listener);
 
     }
 
@@ -210,11 +247,16 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
             listener.getLogger().println(mapper.writeValue(project));
             Unirest.setObjectMapper(mapper);
             Unirest.setHttpClient(Utils.getClient());
-            Unirest.post(this.serverUrl + "/projects")
+            HttpResponse<String> response = Unirest.post(this.serverUrl + "/projects")
                     .header("accept", "application/json")
                     .header("Content-Type", "application/json")
                     .basicAuth(credentials.getUsername(), credentials.getPassword().getPlainText())
                     .body(project).asString();
+            listener.getLogger().println("Response : "+response.getBody());
+            if (!response.getBody().contains("\"key\":\""+pKey.toUpperCase()+"\"")){
+                listener.getLogger().println("Unable to Create Project. Bitbucket Server Response :"+response.getBody());
+                return false;
+            }
             listener.getLogger().println("Successfully Created Project :"+pName+" with Key:"+pKey);
             listener.getLogger().println("=======================");
             return true;
@@ -232,7 +274,7 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
     private boolean createRepo(String pKey,String repoName, TaskListener listener){
         try {
             if ((Strings.isNullOrEmpty(repoName) || Strings.isNullOrEmpty(pKey))) {
-                listener.getLogger().println("No Project Key provided. Or Repository Name is empty in pom.xml");
+                listener.getLogger().println("No Project Key provided. Or Artifact Id is empty in pom.xml");
                 return false;
             }
             String repoObj = "{ \"name\": \"" + repoName + "\"}";
@@ -266,33 +308,34 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
                 .basicAuth(credentials.getUsername(), credentials.getPassword().getPlainText())
                 .body(hookObj).asString();
     }
-    private boolean processHook(int command,String pKey,TaskListener listener){
+    private boolean processHook(int command,String pKey,String jenkinsServer, TaskListener listener){
+
         String hookUrl = this.serverUrl+"/projects/"+pKey+"/repos/"+this.repoName+"/settings/hooks/com.ngs.stash.externalhooks.external-hooks:external-post-receive-hook/enabled";
         String hookObj = null;
         Unirest.setHttpClient(Utils.getClient());
         HttpRequestWithBody request = null;
-        Jenkins instance = Jenkins.getActiveInstance();
-        try {
-            switch (command){
-                case ADD_HOOK: {
-                    hookObj = "{\"exe\":\"create-jenkins-jobs.sh\",\"safe_path\":true,\"params\":\""+credentials.getUsername()+"\\\\r\\\\n"+credentials.getPassword().getPlainText()+"\\\\r\\\\n"+instance.getRootUrl()+"\"}";
-                    setupHook(Unirest.put(hookUrl),hookObj,listener);
-                    break;
-                }
-                default:
-                case REMOVE_HOOK:{
-                     hookObj = "{\"exe\":\"create-jenkins-jobs.sh\",\"safe_path\":true,\"params\":\"\"}";
-                     setupHook(Unirest.put(hookUrl),hookObj,listener);
-                     setupHook(Unirest.delete(hookUrl),hookObj,listener);
-                    break;
-                }
+        if (!Strings.isNullOrEmpty(this.ciServer)) {
+            try {
+                switch (command) {
+                    case ADD_HOOK: {
+                        hookObj = "{\"exe\":\"create-jenkins-jobs.sh\",\"safe_path\":true,\"params\":\"" + credentials.getUsername() + "\\r\\n" + credentials.getPassword().getPlainText() + "\\r\\n" + jenkinsServer + "\"}";
+                        setupHook(Unirest.put(hookUrl), hookObj, listener);
+                        break;
+                    }
+                    default:
+                    case REMOVE_HOOK: {
+                        hookObj = "{\"exe\":\"create-jenkins-jobs.sh\",\"safe_path\":true,\"params\":\"\"}";
+                        setupHook(Unirest.put(hookUrl), hookObj, listener);
+                        setupHook(Unirest.delete(hookUrl), hookObj, listener);
+                        break;
+                    }
 
+                }
+                return true;
+            } catch (UnirestException e) {
+                listener.getLogger().println(ExceptionUtils.getStackTrace(e));
+                listener.getLogger().println(e.getMessage());
             }
-            return true;
-        } catch (UnirestException e) {
-            e.printStackTrace();
-            listener.getLogger().println(ExceptionUtils.getStackTrace(e));
-            listener.getLogger().println(e.getMessage());
         }
         return false;
     }
@@ -323,6 +366,8 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
     public DescriptorImpl getDescriptor() {
         return (DescriptorImpl)super.getDescriptor();
     }
+
+
     @Extension
     public static final class DescriptorImpl extends BuildStepDescriptor<Builder> {
         public DescriptorImpl() {
@@ -439,6 +484,13 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
         @DataBoundConstructor
         public BProject(String projectName){
             this.projectName = projectName;
+        }
+    }
+    public static class CIServer {
+        String ciServer;
+        @DataBoundConstructor
+        public CIServer(String ciServer){
+            this.ciServer = ciServer;
         }
     }
 }

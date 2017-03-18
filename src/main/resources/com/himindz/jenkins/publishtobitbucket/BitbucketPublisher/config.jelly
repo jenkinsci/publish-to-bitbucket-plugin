@@ -34,5 +34,14 @@
           </f:optionalBlock>
       </table>
     </f:block>
+    <f:block>
+      <table>
+        <f:optionalBlock name="createJenkinsJobs" title="Create Jenkins Jobs" checked="${instance.isCreateJenkinsJobs()}">
+          <f:entry title="Jenkins CI Server URL">
+            <f:textbox name="ciServer" value="${instance.getCiServer()}"/>
+          </f:entry>
+        </f:optionalBlock>
+      </table>
+    </f:block>
   </f:section>
 </j:jelly>
