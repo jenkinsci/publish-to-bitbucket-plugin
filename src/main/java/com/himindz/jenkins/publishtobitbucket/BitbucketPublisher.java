@@ -30,6 +30,7 @@ import jenkins.model.Jenkins;
 import jenkins.tasks.SimpleBuildStep;
 import net.sf.json.JSONArray;
 import net.sf.json.JSONObject;
+import org.apache.commons.lang.StringUtils;
 import org.apache.commons.lang.exception.ExceptionUtils;
 import org.apache.maven.model.Model;
 import org.apache.maven.model.io.xpp3.MavenXpp3Reader;
@@ -95,12 +96,15 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
                               BProject createProject,CIServer createJenkinsJobs ) {
         this.serverUrl = serverUrl;
         this.createProject = createProject;
+        this.createJenkinsJobs = createJenkinsJobs;
+
         if (createProject != null) {
             this.projectName = createProject.projectName;
         }
         if (createJenkinsJobs != null) {
             this.ciServer = createJenkinsJobs.ciServer;
         }
+
         this.credentialsId = credentialsId;
         this.projectKey = projectKey;
         Unirest.setObjectMapper(mapper);
@@ -143,6 +147,12 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
     public String getProjectName() {
         return projectName;
     }
+    public String getProjectUsers() {
+        return this.createProject.projectUsers;
+    }
+    public String getProjectGroups() {
+        return this.createProject.projectGroups;
+    }
 
     public String getCredentialsId() {
         return credentialsId;
@@ -178,6 +188,8 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
         try {
             String pKey = Utils.getExpandedVariable(this.projectKey,build,listener);
             String pName = Utils.getExpandedVariable(this.projectName,build,listener);
+            String users = Utils.getExpandedVariable(this.createProject.projectUsers,build,listener);
+            String groups = Utils.getExpandedVariable(this.createProject.projectGroups,build,listener);
             String jenkinsServer = Utils.getExpandedVariable(this.ciServer,build,listener);
 
             Job<?, ?> job = build.getParent();
@@ -191,7 +203,7 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
             this.credentials=CredentialsProvider.findCredentialById(credentialsId, StandardUsernamePasswordCredentials.class, build);
             this.repoName = getRepoName(workspace,listener);
             if (repoName != null) {
-                if (setupBitbucketProjectAndRepository(pKey,pName,jenkinsServer,listener)){
+                if (setupBitbucketProjectAndRepository(pKey,pName,jenkinsServer,users,groups,listener)){
                     if (pushToGit(listener,workspace)){
                         //wait 10 second for the push to complete before removing hook
                         Thread.sleep(10000);
@@ -211,10 +223,10 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
         }
 
     }
-    private boolean setupBitbucketProjectAndRepository(String pKey,String pName,String jenkinsServer, TaskListener listener){
+    private boolean setupBitbucketProjectAndRepository(String pKey,String pName,String jenkinsServer, String users,String groups,TaskListener listener){
         boolean createProject;
         createProject = Strings.isNullOrEmpty(pName) ? false : true;
-        boolean createRepo = !createProject || createProject(pKey,pName,listener);
+        boolean createRepo = !createProject || createProject(pKey,pName, users, groups,listener);
         boolean addHook = createRepo && createRepo(pKey,repoName, listener);
         return addHook && processHook(ADD_HOOK,pKey,jenkinsServer,listener);
 
@@ -240,7 +252,7 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
         return null;
     }
 
-    private boolean createProject(String pKey, String pName,TaskListener listener){
+    private boolean createProject(String pKey, String pName,String users, String groups,TaskListener listener){
         try {
             listener.getLogger().print("Creating Project :"+pName+" with Key:"+pKey);
             BitbucketProject project = new BitbucketProject(pName,pKey);
@@ -256,6 +268,26 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
             if (!response.getBody().contains("\"key\":\""+pKey.toUpperCase()+"\"")){
                 listener.getLogger().println("Unable to Create Project. Bitbucket Server Response :"+response.getBody());
                 return false;
+            }
+            if (!Strings.isNullOrEmpty(users)) {
+                String user_parameter = "name="+users.replace(",","&name=");
+                listener.getLogger().println("Request: "+this.serverUrl + "/projects/" + pKey.toUpperCase() + "/permissions/users?permission=PROJECT_WRITE&" +user_parameter);
+                Unirest.put(this.serverUrl + "/projects/" + pKey.toUpperCase() + "/permissions/users?permission=PROJECT_WRITE&" +user_parameter)
+                        .header("accept", "application/json")
+                        .header("Content-Type", "application/json")
+                        .basicAuth(credentials.getUsername(), credentials.getPassword().getPlainText())
+                        .body(project).asString();
+
+            }
+            if (!Strings.isNullOrEmpty(groups)) {
+                String group_parameter = "name="+groups.replace(",","&name=");
+                listener.getLogger().println("Request: "+ pKey.toUpperCase() + "/permissions/groups?permission=PROJECT_WRITE&" +group_parameter);
+                Unirest.put(this.serverUrl + "/projects/" + pKey.toUpperCase() + "/permissions/groups?permission=PROJECT_WRITE&" +group_parameter)
+                        .header("accept", "application/json")
+                        .header("Content-Type", "application/json")
+                        .basicAuth(credentials.getUsername(), credentials.getPassword().getPlainText())
+                        .body(project).asString();
+
             }
             listener.getLogger().println("Successfully Created Project :"+pName+" with Key:"+pKey);
             listener.getLogger().println("=======================");
@@ -481,10 +513,16 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
 
     public static class BProject {
         String projectName;
+        String projectUsers;
+        String projectGroups;
         @DataBoundConstructor
-        public BProject(String projectName){
+        public BProject(String projectName,String projectUsers, String projectGroups){
             this.projectName = projectName;
+            this.projectUsers = projectUsers;
+            this.projectGroups = projectGroups;
         }
+
+
     }
     public static class CIServer {
         String ciServer;

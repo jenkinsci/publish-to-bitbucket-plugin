@@ -31,6 +31,13 @@
               <f:entry title="Project Name">
                   <f:textbox name="projectName" value="${instance.getProjectName()}"/>
               </f:entry>
+              <f:entry title="Project Users">
+                <f:textbox name="projectUsers" value="${instance.getProjectUsers()}"/>
+              </f:entry>
+            <f:entry title="Project Groups">
+              <f:textbox name="projectGroups" value="${instance.getProjectGroups()}"/>
+            </f:entry>
+
           </f:optionalBlock>
       </table>
     </f:block>
