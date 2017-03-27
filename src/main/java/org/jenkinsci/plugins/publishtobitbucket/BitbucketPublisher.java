@@ -1,4 +1,4 @@
-package com.himindz.jenkins.publishtobitbucket;
+package org.jenkinsci.plugins.publishtobitbucket;
 
 import com.cloudbees.plugins.credentials.CredentialsProvider;
 import com.cloudbees.plugins.credentials.common.StandardListBoxModel;

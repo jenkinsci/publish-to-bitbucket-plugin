@@ -9,29 +9,19 @@
     <version>2.11</version>
     <relativePath/>
   </parent>
-  <groupId>com.himindz.jenkins</groupId>
+  <groupId>org.jenkins-ci.plugins</groupId>
   <artifactId>publish-to-bitbucket</artifactId>
-  <version>1.0</version>
+  <version>0.1</version>
   <packaging>hpi</packaging>
 
   <properties>
-    <!-- Baseline Jenkins version you use to build the plugin. Users must have this version or newer to run. -->
     <jenkins.version>1.625.3</jenkins.version>
-    <!-- Java Level to use. Java 7 required when using core >= 1.612 -->
     <java.level>7</java.level>
-    <!-- Jenkins Test Harness version you use to test the plugin. -->
-    <!-- For Jenkins version >= 1.580.1 use JTH 2.x or higher. -->
     <jenkins-test-harness.version>2.13</jenkins-test-harness.version>
-    <!-- Other properties you may want to use:
-         ~ hpi-plugin.version: The HPI Maven Plugin version used by the plugin..
-         ~ stapler-plugin.version: The Stapler Maven plugin version required by the plugin.
-    -->
   </properties>
-
   <name>Publish to Bitbucket Plugin</name>
   <description>This plugin publishes the current code to a bitbucket server by creating a new repository and/or project.</description>
   <url>https://wiki.jenkins-ci.org/display/JENKINS/Publish+to+Bitbucket+Plugin</url>
-
   <licenses>
     <license>
       <name>MIT License</name>
@@ -45,12 +35,18 @@
       <name>Ali Khan</name>
       <email>alikhan@himindz.ie</email>
     </developer>
+    <developer>
+      <id>ali-himindz</id>
+      <name>Ali Khan</name>
+      <email>mohhamed.khan@gmail.com</email>
+    </developer>
   </developers>
 
   <scm>
     <connection>scm:git:git://github.com/jenkinsci/${project.artifactId}-plugin.git</connection>
     <developerConnection>scm:git:git@github.com:jenkinsci/${project.artifactId}-plugin.git</developerConnection>
-    <url>http://github.com/jenkinsci/${project.artifactId}-plugin</url>
+    <url>https://github.com/jenkinsci/${project.artifactId}-plugin</url>
+    <tag>HEAD</tag>
   </scm>
   <repositories>
     <repository>
@@ -65,7 +61,6 @@
     </pluginRepository>
   </pluginRepositories>
   <dependencies>
-      <!-- https://mvnrepository.com/artifact/org.jenkins-ci.plugins/git-client -->
       <dependency>
           <groupId>org.jenkins-ci.plugins</groupId>
           <artifactId>git-client</artifactId>
@@ -98,15 +93,11 @@
           <artifactId>jackson-databind</artifactId>
           <version>2.2.3</version>
       </dependency>
-
-      <!-- https://mvnrepository.com/artifact/org.apache.maven/maven-model -->
       <dependency>
           <groupId>org.apache.maven</groupId>
           <artifactId>maven-model</artifactId>
           <version>3.3.9</version>
       </dependency>
-
-
   </dependencies>
 
   <build>

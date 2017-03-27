@@ -1,4 +1,4 @@
-package com.himindz.jenkins.publishtobitbucket;
+package org.jenkinsci.plugins.publishtobitbucket;
 
 /**
  * Created by ali on 09/03/2017.

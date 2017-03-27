@@ -1,4 +1,4 @@
-package com.himindz.jenkins.publishtobitbucket;
+package org.jenkinsci.plugins.publishtobitbucket;
 
 
 import hudson.EnvVars;
