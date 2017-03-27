@@ -16,7 +16,7 @@ Requirements
 * Bitbucket user with permission to create the repository/project
 
 Jenkins
-* Jenkins version 1.625.3 or newer is required.
+* Jenkins version 1.642.3 or newer is required.
 
 Version 1.0 (March 27, 2017)
 Initial release

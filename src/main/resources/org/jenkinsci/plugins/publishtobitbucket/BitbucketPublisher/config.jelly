@@ -5,12 +5,12 @@
     When submitted, it will be passed to the corresponding constructor parameter.
   -->
   <f:section title="${%Bitbucket Server Info}">
-    <f:entry title="${%Bitbucket Server}" help="/plugin/ssh/help-serverAliveInterval.html">
+    <f:entry field="serverUrl" title="${%Bitbucket Server}" >
       <f:textbox name="serverUrl" value="${instance.getServerUrl()}"
                  checkUrl="'descriptorByName/BitbucketPublisher/checkServerUrl' + qs(this).nearBy('credentialsId').nearBy('serverUrl').toString()"
         />
     </f:entry>
-    <f:entry title="${%Credentials}" field="credentialsId">
+    <f:entry title="${%Credentials}" field="credentialsId" >
       <c:select
       />
     </f:entry>
@@ -19,7 +19,7 @@
               method="testConnection" with="serverUrl,credentialsId" />
   </f:section>
   <f:section title="${%Bitbucket Project Info}">
-    <f:entry title="${%Project Key}" help="/plugin/publish-to-bitbucket/help-ProjectKey.html">
+    <f:entry title="${%Project Key}" field="projectKey">
       <f:textbox name="projectKey" value="${instance.getProjectKey()}"
                  checkUrl="'descriptorByName/BitbucketPublisher/checkProjectKey' + qs(this).nearBy('projectKey').toString()"
 
@@ -27,14 +27,14 @@
     </f:entry>
     <f:block>
       <table>
-          <f:optionalBlock name="createProject" title="Create Project" checked="${instance.isCreateProjectEnabled()}">
-              <f:entry title="Project Name">
+          <f:optionalBlock field="createProject" name="createProject" title="Create Project" checked="${instance.isCreateProjectEnabled()}">
+              <f:entry title="Project Name" field="projectName"  >
                   <f:textbox name="projectName" value="${instance.getProjectName()}"/>
               </f:entry>
-              <f:entry title="Project Users">
+              <f:entry title="Project Users" field="projectUsers">
                 <f:textbox name="projectUsers" value="${instance.getProjectUsers()}"/>
               </f:entry>
-            <f:entry title="Project Groups">
+            <f:entry title="Project Groups" field="projectGroups">
               <f:textbox name="projectGroups" value="${instance.getProjectGroups()}"/>
             </f:entry>
 
@@ -43,8 +43,8 @@
     </f:block>
     <f:block>
       <table>
-        <f:optionalBlock name="createJenkinsJobs" title="Create Jenkins Jobs" checked="${instance.isCreateJenkinsJobs()}">
-          <f:entry title="Jenkins CI Server URL">
+        <f:optionalBlock field="createJenkinsJobs"  name="createJenkinsJobs" title="Create Jenkins Jobs" checked="${instance.isCreateJenkinsJobs()}">
+          <f:entry title="Jenkins CI Server URL" field="ciServer">
             <f:textbox name="ciServer" value="${instance.getCiServer()}"/>
           </f:entry>
         </f:optionalBlock>
