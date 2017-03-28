@@ -109,10 +109,5 @@
       </plugin>
     </plugins>
   </build>
-    <distributionManagement>
-        <repository>
-            <id>maven-releases</id>
-            <url>https://nexus.khudkar.io:7082/repository/maven-releases/</url>
-        </repository>
-    </distributionManagement>
+
 </project>
