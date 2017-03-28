@@ -37,16 +37,13 @@ import java.security.cert.X509Certificate;
 public class Utils {
     private static HttpClient unsafeHttpClient;
 
-    public static String getExpandedVariable(final String variable, final Run<?, ?> build, final TaskListener listener){
+    public static String getExpandedVariable(final String variable, final Run<?, ?> build,
+                                             final TaskListener listener){
         try {
             final EnvVars env = build.getEnvironment(listener);
             return env.expand(variable);
-        } catch (IOException e) {
-            e.printStackTrace();
-        } catch (InterruptedException e) {
-            e.printStackTrace();
+        } catch (IOException | InterruptedException e) {
         }
-
         return variable;
     }
     static {

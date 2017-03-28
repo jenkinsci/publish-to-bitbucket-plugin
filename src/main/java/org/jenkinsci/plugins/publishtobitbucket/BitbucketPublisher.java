@@ -20,42 +20,46 @@ import hudson.model.*;
 import hudson.model.queue.Tasks;
 import hudson.plugins.git.GitSCM;
 import hudson.plugins.git.GitTool;
-import hudson.scm.SCM;
-import hudson.security.ACL;
 import hudson.tasks.BuildStepDescriptor;
 import hudson.tasks.Builder;
 import hudson.util.FormValidation;
 import hudson.util.ListBoxModel;
-import jenkins.model.Jenkins;
 import jenkins.tasks.SimpleBuildStep;
-import net.sf.json.JSONArray;
 import net.sf.json.JSONObject;
-import org.apache.commons.lang.StringUtils;
 import org.apache.commons.lang.exception.ExceptionUtils;
 import org.apache.maven.model.Model;
 import org.apache.maven.model.io.xpp3.MavenXpp3Reader;
 import org.codehaus.plexus.util.xml.pull.XmlPullParserException;
-import org.eclipse.jgit.transport.RemoteConfig;
 import org.eclipse.jgit.transport.URIish;
 import org.jenkinsci.plugins.gitclient.Git;
 import org.jenkinsci.plugins.gitclient.GitClient;
 import org.jenkinsci.plugins.gitclient.GitURIRequirementsBuilder;
 import org.kohsuke.stapler.*;
 
+import javax.annotation.Nonnull;
 import javax.servlet.ServletException;
-import java.io.*;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStreamReader;
 import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+
+import static hudson.model.queue.Tasks.getAuthenticationOf;
+import static org.jenkinsci.plugins.publishtobitbucket.Utils.getExpandedVariable;
 
 /**
 
  * @author Ali Khan
  */
 public class BitbucketPublisher extends Builder implements SimpleBuildStep {
-    public static final int ADD_HOOK=1;
-    public static final int REMOVE_HOOK=2;
+    private static final int ADD_HOOK=1;
+    private static final int REMOVE_HOOK=2;
+    private static final String REST_API="/rest/api/1.0";
 
     private  String serverUrl;
     private  String projectName;
@@ -68,6 +72,9 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
     private String repositoryUrl;
     private String repoName;
     private String localFolder;
+
+    private Map<String,String> expandedVariables;
+    private TaskListener currentListener;
 
     private transient StandardUsernamePasswordCredentials credentials;
     private static ObjectMapper mapper = new ObjectMapper() {
@@ -90,7 +97,6 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
             }
         }
     };
-    // Fields in config.jelly must match the parameter names in the "DataBoundConstructor"
     @DataBoundConstructor
     public BitbucketPublisher(String serverUrl, String credentialsId, String projectKey,
                               BProject createProject,CIServer createJenkinsJobs ) {
@@ -158,10 +164,6 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
         return credentialsId;
     }
 
-    public BProject getCreateProject() {
-        return createProject;
-    }
-
     public String getProjectKey() {
         return projectKey;
     }
@@ -174,8 +176,6 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
         return createJenkinsJobs;
     }
 
-
-
     public String isCreateProjectEnabled(){
         return Strings.isNullOrEmpty(this.projectName)? "false":"true";
     }
@@ -184,14 +184,16 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
     }
 
     @Override
-    public void perform(Run<?,?> build, FilePath workspace, Launcher launcher, TaskListener listener) {
+    public void perform(@Nonnull Run<?,?> build, @Nonnull FilePath workspace,
+                        @Nonnull Launcher launcher, @Nonnull TaskListener listener) {
         try {
-            String pKey = Utils.getExpandedVariable(this.projectKey,build,listener);
-            String pName = Utils.getExpandedVariable(this.projectName,build,listener);
-            String users = Utils.getExpandedVariable(this.createProject.projectUsers,build,listener);
-            String groups = Utils.getExpandedVariable(this.createProject.projectGroups,build,listener);
-            String jenkinsServer = Utils.getExpandedVariable(this.ciServer,build,listener);
-
+            this.currentListener = listener;
+            this.expandedVariables = new HashMap<>();
+            this.expandedVariables.put("projectKey",getExpandedVariable(this.projectKey,build,listener).toUpperCase());
+            this.expandedVariables.put("projectName",getExpandedVariable(this.projectName,build,listener));
+            this.expandedVariables.put("projectUsers",getExpandedVariable(this.createProject.projectUsers,build,listener));
+            this.expandedVariables.put("projectGroups",getExpandedVariable(this.createProject.projectGroups,build,listener));
+            this.expandedVariables.put("jenkinsServer",getExpandedVariable(this.ciServer,build,listener));
             Job<?, ?> job = build.getParent();
             if (job instanceof AbstractProject) {
                 AbstractProject project = (AbstractProject) job;
@@ -203,12 +205,11 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
             this.credentials=CredentialsProvider.findCredentialById(credentialsId, StandardUsernamePasswordCredentials.class, build);
             this.repoName = getRepoName(workspace,listener);
             if (repoName != null) {
-                if (setupBitbucketProjectAndRepository(pKey,pName,jenkinsServer,users,groups,listener)){
-                    if (pushToGit(listener,workspace)){
-                        //wait 10 second for the push to complete before removing hook
+                if (setupBitbucketProjectAndRepository()){
+                    if (pushToGit()){
                         Thread.sleep(10000);
-                        processHook(REMOVE_HOOK,pKey,jenkinsServer,listener);
-                    };
+                        processHook(REMOVE_HOOK);
+                    }
                 }else{
                     throw new RuntimeException(Messages.BitbucketPublisher_projectNotCreated());
 
@@ -223,12 +224,12 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
         }
 
     }
-    private boolean setupBitbucketProjectAndRepository(String pKey,String pName,String jenkinsServer, String users,String groups,TaskListener listener){
+    private boolean setupBitbucketProjectAndRepository(){
         boolean createProject;
-        createProject = Strings.isNullOrEmpty(pName) ? false : true;
-        boolean createRepo = !createProject || createProject(pKey,pName, users, groups,listener);
-        boolean addHook = createRepo && createRepo(pKey,repoName, listener);
-        return addHook && processHook(ADD_HOOK,pKey,jenkinsServer,listener);
+        createProject = !Strings.isNullOrEmpty(this.expandedVariables.get("projectName"));
+        boolean createRepo = !createProject || createProject();
+        boolean addHook = createRepo && createRepo();
+        return addHook && processHook(ADD_HOOK);
 
     }
 
@@ -252,11 +253,13 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
         return null;
     }
 
-    private boolean createProject(String pKey, String pName,String users, String groups,TaskListener listener){
+    private boolean createProject(){
         try {
-            listener.getLogger().print("Creating Project :"+pName+" with Key:"+pKey);
-            BitbucketProject project = new BitbucketProject(pName,pKey);
-            listener.getLogger().println(mapper.writeValue(project));
+            this.currentListener.getLogger().print("Creating Project :"+this.expandedVariables.get("projectName")+" with Key:"
+                                                    +this.expandedVariables.get("projectKey"));
+            BitbucketProject project = new BitbucketProject(this.expandedVariables.get("projectName"),this.expandedVariables.get("projectKey"));
+
+            this.currentListener.getLogger().println(mapper.writeValue(project));
             Unirest.setObjectMapper(mapper);
             Unirest.setHttpClient(Utils.getClient());
             HttpResponse<String> response = Unirest.post(this.serverUrl + "/projects")
@@ -264,60 +267,63 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
                     .header("Content-Type", "application/json")
                     .basicAuth(credentials.getUsername(), credentials.getPassword().getPlainText())
                     .body(project).asString();
-            listener.getLogger().println("Response : "+response.getBody());
-            if (!response.getBody().contains("\"key\":\""+pKey.toUpperCase()+"\"")){
-                listener.getLogger().println("Unable to Create Project. Bitbucket Server Response :"+response.getBody());
+            this.currentListener.getLogger().println("Response : "+response.getBody());
+            if (!response.getBody().contains("\"key\":\""+this.expandedVariables.get("projectKey")+"\"")){
+                this.currentListener.getLogger().println("Unable to Create Project. Bitbucket Server Response :"+response.getBody());
                 return false;
             }
-            if (!Strings.isNullOrEmpty(users)) {
-                String user_parameter = "name="+users.replace(",","&name=");
-                listener.getLogger().println("Request: "+this.serverUrl + "/projects/" + pKey.toUpperCase() + "/permissions/users?permission=PROJECT_WRITE&" +user_parameter);
-                Unirest.put(this.serverUrl + "/projects/" + pKey.toUpperCase() + "/permissions/users?permission=PROJECT_WRITE&" +user_parameter)
+            if (!Strings.isNullOrEmpty(this.expandedVariables.get("projectUsers"))) {
+                String user_parameter = "name="+this.expandedVariables.get("projectUsers").replace(",","&name=");
+                this.currentListener.getLogger().println("Request: "+this.serverUrl + "/projects/" + this.expandedVariables.get("projectKey")
+                                                            + "/permissions/users?permission=PROJECT_WRITE&" +user_parameter);
+                Unirest.put(this.serverUrl + "/projects/" + this.expandedVariables.get("projectKey")
+                                + "/permissions/users?permission=PROJECT_WRITE&" +user_parameter)
                         .header("accept", "application/json")
                         .header("Content-Type", "application/json")
                         .basicAuth(credentials.getUsername(), credentials.getPassword().getPlainText())
                         .body(project).asString();
 
             }
-            if (!Strings.isNullOrEmpty(groups)) {
-                String group_parameter = "name="+groups.replace(",","&name=");
-                listener.getLogger().println("Request: "+ pKey.toUpperCase() + "/permissions/groups?permission=PROJECT_WRITE&" +group_parameter);
-                Unirest.put(this.serverUrl + "/projects/" + pKey.toUpperCase() + "/permissions/groups?permission=PROJECT_WRITE&" +group_parameter)
+            if (!Strings.isNullOrEmpty(this.expandedVariables.get("projectGroups"))) {
+                String group_parameter = "name="+this.expandedVariables.get("projectGroups").replace(",","&name=");
+                this.currentListener.getLogger().println("Request: "+ this.expandedVariables.get("projectKey")
+                                                        + "/permissions/groups?permission=PROJECT_WRITE&" +group_parameter);
+                Unirest.put(this.serverUrl + "/projects/" + this.expandedVariables.get("projectKey")
+                                + "/permissions/groups?permission=PROJECT_WRITE&" +group_parameter)
                         .header("accept", "application/json")
                         .header("Content-Type", "application/json")
                         .basicAuth(credentials.getUsername(), credentials.getPassword().getPlainText())
                         .body(project).asString();
 
             }
-            listener.getLogger().println("Successfully Created Project :"+pName+" with Key:"+pKey);
-            listener.getLogger().println("=======================");
+            this.currentListener.getLogger().println("Successfully Created Project :"+this.expandedVariables.get("projectName")+" with Key:"
+                                                        +this.expandedVariables.get("projectKey"));
+            this.currentListener.getLogger().println("=======================");
             return true;
         } catch (UnirestException e) {
-            listener.getLogger().println("ERROR: Creating Project:"+pName);
-            listener.getLogger().println(ExceptionUtils.getStackTrace(e));
-            listener.getLogger().println(e.getMessage());
-            listener.getLogger().println("=======================");
-
+            this.currentListener.getLogger().println("ERROR: Creating Project:"+this.expandedVariables.get("projectName"));
+            this.currentListener.getLogger().println(ExceptionUtils.getStackTrace(e));
+            this.currentListener.getLogger().println(e.getMessage());
             return false;
         }
 
     }
 
-    private boolean createRepo(String pKey,String repoName, TaskListener listener){
+    private boolean createRepo(){
         try {
-            if ((Strings.isNullOrEmpty(repoName) || Strings.isNullOrEmpty(pKey))) {
-                listener.getLogger().println("No Project Key provided. Or Artifact Id is empty in pom.xml");
+            if ((Strings.isNullOrEmpty(repoName) || Strings.isNullOrEmpty(this.expandedVariables.get("projectKey")))) {
+                this.currentListener.getLogger().println("No Project Key provided. Or Artifact Id is empty in pom.xml");
                 return false;
             }
             String repoObj = "{ \"name\": \"" + repoName + "\"}";
             Unirest.setObjectMapper(mapper);
             Unirest.setHttpClient(Utils.getClient());
-            HttpResponse<JsonNode> postResponse = Unirest.post(this.serverUrl + "/projects/" + pKey + "/repos")
+            HttpResponse<JsonNode> postResponse = Unirest.post(this.serverUrl + "/projects/" + this.expandedVariables.get("projectKey") + "/repos")
                     .header("accept", "application/json")
                     .header("Content-Type", "application/json")
                     .basicAuth(credentials.getUsername(),credentials.getPassword().getPlainText())
                     .body(repoObj).asJson();
-            listener.getLogger().println(postResponse.getBody());
+            this.currentListener.getLogger().println(postResponse.getBody());
             org.json.JSONArray cloneurls = postResponse.getBody().getObject().getJSONObject("links").getJSONArray("clone");
             for (int i=0;i<cloneurls.length();i++){
                 String href = cloneurls.getJSONObject(i).getString("href");
@@ -325,57 +331,77 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
                     this.repositoryUrl = href;
                 }
             }
-            listener.getLogger().println("Repo URL="+this.repositoryUrl);
+            if (!Strings.isNullOrEmpty(this.expandedVariables.get("projectUsers"))) {
+                String user_parameter = "name="+this.expandedVariables.get("projectUsers").replace(",","&name=");
+                Unirest.put(this.serverUrl + "/projects/" + this.expandedVariables.get("projectKey") + "/repos/"+repoName
+                                + "/permissions/users?permission=REPO_WRITE&" +user_parameter)
+                        .header("accept", "application/json")
+                        .header("Content-Type", "application/json")
+                        .basicAuth(credentials.getUsername(), credentials.getPassword().getPlainText()).asString();
+
+
+            }
+            if (!Strings.isNullOrEmpty(this.expandedVariables.get("projectGroups"))) {
+                String group_parameter = "name="+this.expandedVariables.get("projectGroups").replace(",","&name=");
+                Unirest.put(this.serverUrl + "/projects/" + this.expandedVariables.get("projectKey")+ "/repos/"+repoName
+                            +"/permissions/groups?permission=REPO_WRITE&" +group_parameter)
+                        .header("accept", "application/json")
+                        .header("Content-Type", "application/json")
+                        .basicAuth(credentials.getUsername(), credentials.getPassword().getPlainText()).asString();
+
+            }
+            this.currentListener.getLogger().println("Repo URL="+this.repositoryUrl);
             return true;
         } catch (UnirestException e) {
-            e.printStackTrace();
-            listener.getLogger().println(ExceptionUtils.getStackTrace(e));
-            listener.getLogger().println(e.getMessage());
+            this.currentListener.getLogger().println(ExceptionUtils.getStackTrace(e));
+            this.currentListener.getLogger().println(e.getMessage());
         }
         return false;
     }
-    private void setupHook(HttpRequestWithBody request,String hookObj,TaskListener listener ) throws UnirestException {
+    private void setupHook(HttpRequestWithBody request,String hookObj) throws UnirestException {
         request.header("accept", "application/json")
                 .header("Content-Type", "application/json")
                 .basicAuth(credentials.getUsername(), credentials.getPassword().getPlainText())
                 .body(hookObj).asString();
     }
-    private boolean processHook(int command,String pKey,String jenkinsServer, TaskListener listener){
+    private boolean processHook(int command){
 
-        String hookUrl = this.serverUrl+"/projects/"+pKey+"/repos/"+this.repoName+"/settings/hooks/com.ngs.stash.externalhooks.external-hooks:external-post-receive-hook/enabled";
-        String hookObj = null;
+        String hookUrl = this.serverUrl+"/projects/"+this.expandedVariables.get("projectName")+"/repos/"+
+                         this.repoName+"/settings/hooks/com.ngs.stash.externalhooks.external-hooks:external-post-receive-hook/enabled";
+        String hookObj;
         Unirest.setHttpClient(Utils.getClient());
-        HttpRequestWithBody request = null;
         if (!Strings.isNullOrEmpty(this.ciServer)) {
             try {
                 switch (command) {
                     case ADD_HOOK: {
-                        hookObj = "{\"exe\":\"create-jenkins-jobs.sh\",\"safe_path\":true,\"params\":\"" + credentials.getUsername() + "\\r\\n" + credentials.getPassword().getPlainText() + "\\r\\n" + jenkinsServer + "\"}";
-                        setupHook(Unirest.put(hookUrl), hookObj, listener);
+                        hookObj = "{\"exe\":\"create-jenkins-jobs.sh\",\"safe_path\":true,\"params\":\"" + credentials.getUsername()
+                                    + "\\r\\n" + credentials.getPassword().getPlainText() + "\\r\\n" + this.expandedVariables.get("jenkinsServer")
+                                    + "\"}";
+                        setupHook(Unirest.put(hookUrl), hookObj);
                         break;
                     }
                     default:
                     case REMOVE_HOOK: {
                         hookObj = "{\"exe\":\"create-jenkins-jobs.sh\",\"safe_path\":true,\"params\":\"\"}";
-                        setupHook(Unirest.put(hookUrl), hookObj, listener);
-                        setupHook(Unirest.delete(hookUrl), hookObj, listener);
+                        setupHook(Unirest.put(hookUrl), hookObj);
+                        setupHook(Unirest.delete(hookUrl), hookObj);
                         break;
                     }
 
                 }
                 return true;
             } catch (UnirestException e) {
-                listener.getLogger().println(ExceptionUtils.getStackTrace(e));
-                listener.getLogger().println(e.getMessage());
+                this.currentListener.getLogger().println(ExceptionUtils.getStackTrace(e));
+                this.currentListener.getLogger().println(e.getMessage());
             }
         }
         return false;
     }
 
 
-    public boolean pushToGit(TaskListener listener,FilePath workspace){
+    private boolean pushToGit(){
         try {
-            Git git = Git.with(listener, new EnvVars(EnvVars.masterEnvVars)).in(new File(this.localFolder));
+            Git git = Git.with(this.currentListener, new EnvVars(EnvVars.masterEnvVars)).in(new File(this.localFolder));
             GitTool gitTool = GitTool.getDefaultInstallation();
             if (gitTool != null) {
                 git.using(gitTool.getGitExe());
@@ -388,8 +414,8 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
             client.push().ref("master").to(new URIish("origin")).force().execute();
         } catch (URISyntaxException | IOException | InterruptedException e) {
             e.printStackTrace();
-            listener.getLogger().println(ExceptionUtils.getStackTrace(e));
-            listener.getLogger().println(e.getMessage());
+            this.currentListener.getLogger().println(ExceptionUtils.getStackTrace(e));
+            this.currentListener.getLogger().println(e.getMessage());
             return false;
         }
         return true;
@@ -423,10 +449,11 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
             return super.configure(req,formData);
         }
 
-        public ListBoxModel doFillCredentialsIdItems(@AncestorInPath Project project, @QueryParameter String credentialsId, @QueryParameter String serverUrl) {
+        public ListBoxModel doFillCredentialsIdItems(@AncestorInPath Project project, @QueryParameter String credentialsId,
+                                                     @QueryParameter String serverUrl) {
             return new StandardListBoxModel()
                     .includeMatchingAs(
-                            Tasks.getAuthenticationOf((Queue.Task) project),
+                            getAuthenticationOf(project),
                             project,
                             StandardUsernameCredentials.class,
                             GitURIRequirementsBuilder.fromUri(serverUrl).build(),
@@ -436,11 +463,13 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
 
         }
         public FormValidation doTestConnection(@QueryParameter("serverUrl") final String serverUrl,
-                                               @QueryParameter("credentialsId") final String credentialsId,@AncestorInPath Project project) throws IOException, ServletException {
-            String apiEndPoint= serverUrl+"/rest/api/1.0/projects";
+                                               @QueryParameter("credentialsId") final String credentialsId,
+                                               @AncestorInPath Project project) throws IOException, ServletException {
+            String apiEndPoint= serverUrl+REST_API+"/projects";
             try {
                 StandardUsernamePasswordCredentials credentials=null;
-                List<StandardUsernamePasswordCredentials> credentialsList = CredentialsProvider.lookupCredentials(StandardUsernamePasswordCredentials.class,project);
+                List<StandardUsernamePasswordCredentials> credentialsList = CredentialsProvider.lookupCredentials(StandardUsernamePasswordCredentials.class,
+                                                                                                                    project);
                 for (StandardUsernamePasswordCredentials c:credentialsList){
                     if (c.getId().equals(credentialsId)){
                         credentials = c;
@@ -450,7 +479,8 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
                 }
                 if (credentials != null) {
                     Unirest.setHttpClient(Utils.getClient());
-                    HttpResponse<JsonNode> response = Unirest.get(apiEndPoint).basicAuth(credentials.getUsername(), credentials.getPassword().getPlainText()).asJson();
+                    HttpResponse<JsonNode> response = Unirest.get(apiEndPoint).basicAuth(credentials.getUsername(),
+                                                                credentials.getPassword().getPlainText()).asJson();
                     if (response.getBody().getObject().has("errors")) {
                         return FormValidation.error("Error : "+response.getBody().getObject().get("errors").toString());
                     }
@@ -463,7 +493,8 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
             }
         }
 
-        public FormValidation doCheckServerUrl(@QueryParameter String serverUrl, @QueryParameter String credentialsId,@AncestorInPath Project project ) throws IOException, ServletException {
+        public FormValidation doCheckServerUrl(@QueryParameter String serverUrl, @QueryParameter String credentialsId,
+                                               @AncestorInPath Project project ) throws IOException, ServletException {
             if (Strings.isNullOrEmpty(serverUrl)) {
                 return FormValidation.error(Messages.BitbucketPublisher_urlEmpty());
             }
@@ -496,21 +527,14 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
          */
         private boolean isValidUrl(String input) {
             try {
-                // There might be no "stream handler" in URL for ssh or git. We always replace the protocol by http for this check.
-                String httpUrl = input.replaceFirst("^[a-zA-Z]+://", "http://");
-                new URI(httpUrl).toURL();
+                new URI(input.replaceFirst("^[a-zA-Z]+://", "http://")).toURL();
                 return true;
-            } catch (MalformedURLException e) {
-                return false;
-            } catch (URISyntaxException e) {
-                return false;
-            } catch (IllegalArgumentException e) {
+            } catch (MalformedURLException | URISyntaxException | IllegalArgumentException e) {
                 return false;
             }
         }
 
     }
-
     public static class BProject {
         String projectName;
         String projectUsers;
@@ -521,8 +545,6 @@ public class BitbucketPublisher extends Builder implements SimpleBuildStep {
             this.projectUsers = projectUsers;
             this.projectGroups = projectGroups;
         }
-
-
     }
     public static class CIServer {
         String ciServer;
